@@ -8,11 +8,28 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv()
+
+# Load and verify environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-client = OpenAI(api_key=OPENAI_API_KEY)
+if not OPENAI_API_KEY:
+    logger.error("OPENAI_API_KEY is not set")
+    raise ValueError("OPENAI_API_KEY is not set")
+
+# Initialize OpenAI client with explicit parameters
+logger.info("Initializing OpenAI client...")
+try:
+    client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        http_client=None  # Avoid custom http_client to prevent proxies issue
+    )
+    logger.info("OpenAI client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+    raise
 
 def predict_box_intake(historical_data, future_box_info, context_text):
     try:
+        logger.info("Constructing prompt for GPT-4o...")
         prompt = f"""
         First, read and understand the following context document to ground your analysis:
         {context_text}
@@ -33,8 +50,8 @@ def predict_box_intake(historical_data, future_box_info, context_text):
         {future_box_info}
         """
         intakes = []
-        for _ in range(5):  # 5 runs for averaging
-            logger.info("Sending request to OpenAI API")
+        for i in range(5):  # 5 runs for averaging
+            logger.info(f"Sending request to OpenAI API (run {i+1}/5)")
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -45,14 +62,21 @@ def predict_box_intake(historical_data, future_box_info, context_text):
                 seed=42
             )
             intake = response.choices[0].message.content.strip()
-            logger.info(f"Run response: {intake}")
+            logger.info(f"Run {i+1} response: {intake}")
             if not intake:
+                logger.error("Empty response from model")
                 raise ValueError("Empty response from model")
-            intake_float = float(intake)
-            if intake_float < 0:
-                raise ValueError("Intake cannot be negative")
-            intakes.append(intake_float)
+            try:
+                intake_float = float(intake)
+                if intake_float < 0:
+                    logger.error("Negative intake value received")
+                    raise ValueError("Intake cannot be negative")
+                intakes.append(intake_float)
+            except ValueError as e:
+                logger.error(f"Invalid intake format: {intake}, error: {str(e)}")
+                raise
         if not intakes:
+            logger.error("No valid intake values collected")
             raise ValueError("No valid intake values collected")
         avg_intake = sum(intakes) / len(intakes)
         logger.info(f"Averaged intake from 5 runs: {avg_intake}")
@@ -66,12 +90,14 @@ def box_score():
     try:
         data = request.get_json()
         if not data or 'future_box_info' not in data or 'context' not in data:
-            logger.error("Missing future_box_info or context")
+            logger.error("Missing future_box_info or context in request")
             return jsonify({'error': 'Missing future_box_info or context'}), 400
         historical_data = data.get('historical_data', 'No historical data provided')
         future_box_info = data['future_box_info']
         context_text = data['context']
+        logger.info("Received request to predict box intake")
         intake = predict_box_intake(historical_data, future_box_info, context_text)
+        logger.info(f"Returning predicted intake: {intake}")
         return jsonify({'predicted_intake': intake})
     except Exception as e:
         logger.error(f"Endpoint error: {str(e)}")
@@ -79,9 +105,9 @@ def box_score():
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    logger.info("Health check requested")
     return jsonify({'status': 'healthy'})
 
 if __name__ == '__main__':
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY not set")
+    logger.info("Starting Flask app locally...")
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
