@@ -3,6 +3,7 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 import logging
+import re
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -15,12 +16,12 @@ if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY is not set")
     raise ValueError("OPENAI_API_KEY is not set")
 
-# Initialize OpenAI client with explicit parameters
+# Initialize OpenAI client
 logger.info("Initializing OpenAI client...")
 try:
     client = OpenAI(
         api_key=OPENAI_API_KEY,
-        http_client=None  # Avoid custom http_client to prevent proxies issue
+        http_client=None
     )
     logger.info("OpenAI client initialized successfully")
 except Exception as e:
@@ -40,14 +41,15 @@ def predict_box_intake(historical_data, future_box_info, context_text):
         welcome box, given its features and a CAC of 17.5 EUR. Consider factors such as the number of products, total retail 
         value, number of unique categories, number of full-size products, number of premium products (> €20), total weight, 
         average product rating, average brand rating, average category rating, and niche products, as well as the insights from 
-        the context document (e.g., niche vs. non-niche products, free gifts, box weight). Return only the numerical value of the 
-        predicted daily intake (e.g., 150.0).
+        the context document (e.g., niche vs. non-niche products, free gifts, box weight).
 
         Historical Data:
         {historical_data}
 
         Future Box:
         {future_box_info}
+
+        Return **only** the numerical value of the predicted daily intake as a float (e.g., 150.0). Do not include any explanations, text, or units. If you cannot provide a numerical value, return 0.0.
         """
         intakes = []
         for i in range(5):  # 5 runs for averaging
@@ -67,7 +69,12 @@ def predict_box_intake(historical_data, future_box_info, context_text):
                 logger.error("Empty response from model")
                 raise ValueError("Empty response from model")
             try:
-                intake_float = float(intake)
+                # Try to extract a number using regex as a fallback
+                match = re.search(r'\d+\.\d+', intake)
+                if match:
+                    intake_float = float(match.group())
+                else:
+                    intake_float = float(intake)
                 if intake_float < 0:
                     logger.error("Negative intake value received")
                     raise ValueError("Intake cannot be negative")
